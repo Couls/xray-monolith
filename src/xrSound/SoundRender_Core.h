@@ -3,6 +3,7 @@
 #include "SoundRender.h"
 #include "SoundRender_Environment.h"
 #include "SoundRender_Cache.h"
+#include "../xrCore/xrSyncronize.h"
 
 class CNotificationClient;
 
@@ -60,6 +61,21 @@ protected:
     // Persistent sound support
     // One entry per persistent emitter: keeps owner_data alive across level GC.
     xr_vector<ref_sound_data_ptr> s_persistent_refs;
+
+	// Background OpenAL update (level load blocks main thread for seconds at a time)
+	xrCriticalSection m_api_cs;
+	volatile BOOL m_bUpdateThreadRun;
+	volatile BOOL m_heavy_load_active;
+	Fvector m_snap_P;
+	Fvector m_snap_D;
+	Fvector m_snap_N;
+
+	void update_impl(const Fvector& P, const Fvector& D, const Fvector& N);
+	void sound_api_enter();
+	void sound_api_leave();
+	bool use_background_update() const;
+
+	friend void SoundRender_UpdateThread(void*);
 public:
 	// Cache
 	CSoundRender_Cache cache;
@@ -87,6 +103,8 @@ public:
 	virtual void restart_emitters();
 	virtual int pause_emitters(bool val);
     virtual void stop_persistent_emitters() override;
+	virtual bool has_playing_persistent() const override;
+	virtual void set_heavy_load_active(bool active) override;
 
     // Called by CSoundRender_Emitter::set_persistent
     void anchor_persistent(CSoundRender_Emitter* E);
@@ -102,7 +120,9 @@ public:
 	virtual void set_geometry_occ(CDB::MODEL* M);
 	virtual void set_handler(sound_event* E);
 
-	virtual void update(const Fvector& P, const Fvector& D, const Fvector& N);
+	virtual void update(const Fvector& P, const Fvector& D, const Fvector& N) override;
+	void update_thread_start();
+	void update_thread_stop();
 	virtual void update_events();
 	virtual void statistic(CSound_stats* dest, CSound_stats_ext* ext);
 

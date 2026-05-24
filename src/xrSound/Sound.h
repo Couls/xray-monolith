@@ -416,6 +416,8 @@ public:
 	virtual void destroy(ref_sound& S) = 0;
 	virtual void stop_emitters() = 0;
     virtual void stop_persistent_emitters() = 0;   // force-stops ALL persistent emitters
+	virtual bool has_playing_persistent() const = 0;
+	virtual void set_heavy_load_active(bool active) = 0;
 	virtual int pause_emitters(bool val) = 0;
 
 	virtual void play(ref_sound& S, CObject* O, u32 flags = 0, float delay = 0.f) = 0;

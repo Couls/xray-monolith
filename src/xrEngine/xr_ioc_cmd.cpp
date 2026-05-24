@@ -1022,6 +1022,7 @@ void CCC_Register()
 	CMD1(CCC_LoadCFG, "cfg_load");
 
 	CMD3(CCC_Mask, "mt_particles", &psDeviceFlags, mtParticles);
+	CMD3(CCC_Mask, "mt_sound", &psDeviceFlags, mtSound);
 
 #ifdef DEBUG
     CMD1(CCC_MotionsStat, "stat_motions");
@@ -1038,7 +1039,6 @@ void CCC_Register()
     CMD1(CCC_DbgStrCheck, "dbg_str_check");
     CMD1(CCC_DbgStrDump, "dbg_str_dump");
 
-    CMD3(CCC_Mask, "mt_sound", &psDeviceFlags, mtSound);
     CMD3(CCC_Mask, "mt_physics", &psDeviceFlags, mtPhysics);
     CMD3(CCC_Mask, "mt_network", &psDeviceFlags, mtNetwork);
 
