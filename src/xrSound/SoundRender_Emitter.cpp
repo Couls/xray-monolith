@@ -38,6 +38,7 @@ CSoundRender_Emitter::CSoundRender_Emitter(void)
 	set_cursor(0);
 	bMoved = TRUE;
 	b2D = FALSE;
+	b_persistent = false;
 	bStopping = FALSE;
 	bRewind = FALSE;
 	iPaused = 0;
@@ -155,4 +156,26 @@ u32 CSoundRender_Emitter::get_cursor(bool b_absolute) const
 void CSoundRender_Emitter::move_cursor(int offset)
 {
 	set_cursor(get_cursor(true) + offset);
+}
+
+void CSoundRender_Emitter::set_persistent(bool bPersist)
+{
+    b_persistent = bPersist;
+
+    if (bPersist)
+    {
+        // Persistent sounds MUST be 2D — they have no world position after
+        // the level is torn down, so spatial rolloff would mute them.
+        if (!b2D)
+            switch_to_2D();
+
+        // Tell the core to anchor this emitter's owner_data so that even
+        // if the Lua ref_sound_data refcount drops to zero the audio keeps
+        // playing.  The core's s_persistent_refs holds the strong reference.
+        SoundRender->anchor_persistent(this);
+    }
+    else
+    {
+        SoundRender->release_persistent(this);
+    }
 }

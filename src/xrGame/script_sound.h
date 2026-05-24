@@ -48,6 +48,9 @@ public:
 	IC const float GetMaxDistance() const;
 	IC const float GetVolume() const;
 	IC bool IsPlaying() const;
+	void set_persistent(bool bPersist);
+	bool is_persistent() const;
+	bool m_bPersistentPending = false;
 
 DECLARE_SCRIPT_REGISTER_FUNCTION
 };

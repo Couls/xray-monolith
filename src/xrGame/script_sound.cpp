@@ -55,6 +55,12 @@ void CScriptSound::Play(CScriptGameObject* object, float delay, int flags)
 	THROW3(m_sound._handle(), "There is no sound", *m_caSoundToPlay);
 	//	Msg							("%6d : CScriptSound::Play (%s), delay %f, flags %d",Device.dwTimeGlobal,m_sound._handle()->file_name(),delay,flags);
 	m_sound.play((object) ? &object->object() : NULL, flags, delay);
+	// After calling m_sound.play(...) or m_sound.play_at_pos(...)
+	if (m_bPersistentPending && m_sound._feedback())
+	{
+		m_sound._feedback()->set_persistent(true);
+		m_bPersistentPending = false;
+	}
 }
 
 void CScriptSound::PlayAtPos(CScriptGameObject* object, const Fvector& position, float delay, int flags)
@@ -62,6 +68,12 @@ void CScriptSound::PlayAtPos(CScriptGameObject* object, const Fvector& position,
 	THROW3(m_sound._handle(), "There is no sound", *m_caSoundToPlay);
 	//	Msg							("%6d : CScriptSound::Play (%s), delay %f, flags %d",m_sound._handle()->file_name(),delay,flags);
 	m_sound.play_at_pos((object) ? &object->object() : NULL, position, flags, delay);
+	// After calling m_sound.play(...) or m_sound.play_at_pos(...)
+	if (m_bPersistentPending && m_sound._feedback())
+	{
+		m_sound._feedback()->set_persistent(true);
+		m_bPersistentPending = false;
+	}
 }
 
 void CScriptSound::PlayNoFeedback(CScriptGameObject* object, u32 flags/*!< Looping */, float delay/*!< Delay */,
@@ -69,4 +81,27 @@ void CScriptSound::PlayNoFeedback(CScriptGameObject* object, u32 flags/*!< Loopi
 {
 	THROW3(m_sound._handle(), "There is no sound", *m_caSoundToPlay);
 	m_sound.play_no_feedback((object) ? &object->object() : NULL, flags, delay, &pos, &vol, &freq);
+	if (m_bPersistentPending && m_sound._feedback())
+	{
+		m_sound._feedback()->set_persistent(true);
+		m_bPersistentPending = false;
+	}
+}
+
+void CScriptSound::set_persistent(bool bPersist)
+{
+	if (!m_sound._feedback())
+	{
+		m_bPersistentPending = bPersist;
+		return;
+	}
+	m_sound._feedback()->set_persistent(bPersist);
+	m_bPersistentPending = false;
+}
+
+bool CScriptSound::is_persistent() const
+{
+	if (m_sound._feedback())
+		return m_sound._feedback()->is_persistent();
+	return m_bPersistentPending;
 }

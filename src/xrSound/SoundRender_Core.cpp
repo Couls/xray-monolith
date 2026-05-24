@@ -101,10 +101,35 @@ void CSoundRender_Core::_clear()
 
 	s_sources.clear();
 
-	// remove emmiters
-	for (u32 eit = 0; eit < s_emitters.size(); eit++)
-		xr_delete(s_emitters[eit]);
-	s_emitters.clear();
+// remove non-persistent emitters; rescue persistent ones
+    {
+	        xr_vector<CSoundRender_Emitter*> survivors;
+	        for (u32 eit = 0; eit < s_emitters.size(); eit++)
+	        {
+	            CSoundRender_Emitter* E = s_emitters[eit];
+	            if (E->b_persistent)
+	            {
+	                // Detach from its current target — the target pool is about
+	                // to be destroyed too.  The emitter enters "simulating" mode
+	                // so the FSM keeps ticking even without a render target.
+	                if (E->target)
+	                {
+	                    // Save byte cursor before the target is torn down.
+	                    // (m_stream_cursor is already up to date in the emitter.)
+	                    E->cancel(); // switches to stSimulating/stSimulatingLooped, releases target
+	                }
+	                survivors.push_back(E);
+	            }
+	            else
+	            {
+	                xr_delete(E);
+	            }
+	        }
+	        s_emitters.clear();
+	        // Re-insert survivors so update() keeps ticking them during loading.
+	        for (auto* E : survivors)
+	            s_emitters.push_back(E);
+	}
 
 	g_target_temp_data.clear();
 	g_target_temp_data_16.clear();
@@ -113,7 +138,25 @@ void CSoundRender_Core::_clear()
 void CSoundRender_Core::stop_emitters()
 {
 	for (u32 eit = 0; eit < s_emitters.size(); eit++)
-		s_emitters[eit]->stop(FALSE);
+	    {
+		        CSoundRender_Emitter* E = s_emitters[eit];
+		        if (!E->b_persistent)
+		            E->stop(FALSE);
+		}
+}
+// Force-stop all persistent emitters (use at main menu / full game quit).
+void CSoundRender_Core::stop_persistent_emitters()
+{
+    for (u32 eit = 0; eit < s_emitters.size(); eit++)
+    {
+        CSoundRender_Emitter* E = s_emitters[eit];
+        if (E->b_persistent)
+        {
+            E->b_persistent = false;        // disarm the flag first
+            release_persistent(E);          // drop core's strong ref
+            E->stop(FALSE);                 // now safe to hard-stop
+        }
+    }
 }
 
 void CSoundRender_Core::restart_emitters()
@@ -132,6 +175,36 @@ int CSoundRender_Core::pause_emitters(bool val)
 		((CSoundRender_Emitter*)s_emitters[it])->pause(val, val ? m_iPauseCounter : m_iPauseCounter + 1);
 
 	return m_iPauseCounter;
+}
+
+// Called when an emitter is marked persistent.
+// The core grabs a strong ref to owner_data so the sound survives Lua GC.
+void CSoundRender_Core::anchor_persistent(CSoundRender_Emitter* E)
+{
+    if (!E || !E->owner_data)
+        return;
+
+    // Only add once
+    for (const auto& ref : s_persistent_refs)
+        if (ref._get() == E->owner_data._get())
+            return;
+
+    s_persistent_refs.push_back(E->owner_data);
+}
+
+// Called when an emitter is un-marked persistent.
+// The core drops its strong ref; the emitter is now mortal again.
+void CSoundRender_Core::release_persistent(CSoundRender_Emitter* E)
+{
+    if (!E || !E->owner_data)
+        return;
+
+    auto it = std::find_if(
+        s_persistent_refs.begin(), s_persistent_refs.end(),
+        [E](const ref_sound_data_ptr& p) { return p._get() == E->owner_data._get(); }
+    );
+    if (it != s_persistent_refs.end())
+        s_persistent_refs.erase(it);
 }
 
 void CSoundRender_Core::env_load()
@@ -402,7 +475,9 @@ void CSoundRender_Core::destroy(ref_sound& S)
 	if (S._feedback())
 	{
 		CSoundRender_Emitter* E = (CSoundRender_Emitter*)S._feedback();
-		E->stop(FALSE);
+		if (!E->b_persistent)
+			E->stop(FALSE);
+		// else: let it keep playing; the core holds ownership
 	}
 	S._p = 0;
 }
@@ -427,9 +502,15 @@ void CSoundRender_Core::_destroy_data(ref_sound_data& S)
 	if (S.feedback)
 	{
 		CSoundRender_Emitter* E = (CSoundRender_Emitter*)S.feedback;
-		E->stop(FALSE);
+		if (!E->b_persistent)
+			E->stop(FALSE);
+		// For persistent emitters: do NOT stop.  The core holds a strong
+		// ref in s_persistent_refs so owner_data stays alive; the emitter
+		// keeps playing.  The script-side ref_sound_data* is going away but
+		// the emitter's owner_data ptr still points to the core-held copy.
 	}
-	R_ASSERT(0==S.feedback);
+	if (!S.feedback || !((CSoundRender_Emitter*)S.feedback)->b_persistent)
+	    R_ASSERT(0 == S.feedback);
 	SoundRender->i_destroy_source((CSoundRender_Source*)S.handle);
 
 	S.handle = NULL;

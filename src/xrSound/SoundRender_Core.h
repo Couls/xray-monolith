@@ -56,6 +56,10 @@ protected:
 	CSoundRender_Environment s_user_environment;
 
 	int m_iPauseCounter;
+
+    // Persistent sound support
+    // One entry per persistent emitter: keeps owner_data alive across level GC.
+    xr_vector<ref_sound_data_ptr> s_persistent_refs;
 public:
 	// Cache
 	CSoundRender_Cache cache;
@@ -82,6 +86,11 @@ public:
 	virtual void stop_emitters();
 	virtual void restart_emitters();
 	virtual int pause_emitters(bool val);
+    virtual void stop_persistent_emitters() override;
+
+    // Called by CSoundRender_Emitter::set_persistent
+    void anchor_persistent(CSoundRender_Emitter* E);
+    void release_persistent(CSoundRender_Emitter* E);
 
 	virtual void play(ref_sound& S, CObject* O, u32 flags = 0, float delay = 0.f);
 	virtual void play_at_pos(ref_sound& S, CObject* O, const Fvector& pos, u32 flags = 0, float delay = 0.f);

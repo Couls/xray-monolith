@@ -333,6 +333,10 @@ public:
 	virtual void stop(BOOL bDeffered) = 0;
 	virtual const CSound_params* get_params() = 0;
 	virtual u32 play_time() = 0;
+
+	// Survive level unload (implementation forces 2D when enabled).
+	virtual void set_persistent(bool bPersist) = 0;
+	virtual bool is_persistent() const = 0;
 };
 
 /// definition (Sound Stream Interface)
@@ -411,6 +415,7 @@ public:
 	virtual void clone(ref_sound& S, const ref_sound& from, esound_type sound_type, int game_type) = 0;
 	virtual void destroy(ref_sound& S) = 0;
 	virtual void stop_emitters() = 0;
+    virtual void stop_persistent_emitters() = 0;   // force-stops ALL persistent emitters
 	virtual int pause_emitters(bool val) = 0;
 
 	virtual void play(ref_sound& S, CObject* O, u32 flags = 0, float delay = 0.f) = 0;
