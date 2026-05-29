@@ -9,6 +9,12 @@
 void CSoundRender_Core::i_start(CSoundRender_Emitter* E)
 {
 	R_ASSERT(E);
+	if (!E->owner_data || !E->owner_data->handle)
+	{
+		Msg("! sound: i_start skipped emitter without valid source handle");
+		E->stop(FALSE);
+		return;
+	}
 
 	// Search lowest-priority target (never steal targets from other persistent streams)
 	float Ptest = E->priority();

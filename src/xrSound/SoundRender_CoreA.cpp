@@ -67,10 +67,9 @@ void SoundRender_UpdateThread(void*)
 
 	while (SoundRender->m_bUpdateThreadRun)
 	{
-		Sleep(SOUND_BG_SLEEP_MS);
+		const u32 sleep_ms = SoundRender->m_heavy_load_active ? 10u : SOUND_BG_SLEEP_MS;
+		Sleep(sleep_ms);
 		if (!SoundRender->bReady)
-			continue;
-		if (!SoundRender->use_background_update())
 			continue;
 
 		SoundRender->sound_api_enter();
@@ -82,6 +81,7 @@ void SoundRender_UpdateThread(void*)
 	}
 
 	alcMakeContextCurrent(nullptr);
+	SoundRender->m_bUpdateThreadExited = TRUE;
 }
 
 void CSoundRender_CoreA::bind_context()

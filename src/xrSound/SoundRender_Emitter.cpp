@@ -39,6 +39,7 @@ CSoundRender_Emitter::CSoundRender_Emitter(void)
 	bMoved = TRUE;
 	b2D = FALSE;
 	b_persistent = false;
+	b_persistent_in_menu = true;
 	bStopping = FALSE;
 	bRewind = FALSE;
 	iPaused = 0;

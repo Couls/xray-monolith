@@ -50,6 +50,7 @@ CSoundRender_Core::CSoundRender_Core()
 	bReady = FALSE;
 	bLocked = FALSE;
 	m_bUpdateThreadRun = FALSE;
+	m_bUpdateThreadExited = TRUE;
 	m_heavy_load_active = FALSE;
 	m_snap_P.set(0, 0, 0);
 	m_snap_D.set(0, 0, 1);
@@ -103,41 +104,75 @@ void CSoundRender_Core::_clear()
 	cache.destroy();
 	env_unload();
 
-	// remove sources
-	for (auto& kv : s_sources)
-		xr_delete(kv.second);
+	// remove non-persistent emitters; rescue persistent ones
+	xr_vector<CSoundRender_Emitter*> survivors;
+	xr_vector<CSoundRender_Source*> persistent_sources;
+	for (u32 eit = 0; eit < s_emitters.size(); eit++)
+	{
+		CSoundRender_Emitter* E = s_emitters[eit];
+		if (E->is_persistent())
+		{
+			// Detach from its current target — the target pool is about
+			// to be destroyed too. The emitter enters "simulating" mode
+			// so the FSM keeps ticking even without a render target.
+			if (E->target)
+				E->cancel(); // switches to stSimulating/stSimulatingLooped, releases target
 
-	s_sources.clear();
-
-// remove non-persistent emitters; rescue persistent ones
-    {
-	        xr_vector<CSoundRender_Emitter*> survivors;
-	        for (u32 eit = 0; eit < s_emitters.size(); eit++)
-	        {
-	            CSoundRender_Emitter* E = s_emitters[eit];
-	            if (E->is_persistent())
-	            {
-	                // Detach from its current target — the target pool is about
-	                // to be destroyed too.  The emitter enters "simulating" mode
-	                // so the FSM keeps ticking even without a render target.
-	                if (E->target)
-	                {
-	                    // Save byte cursor before the target is torn down.
-	                    // (m_stream_cursor is already up to date in the emitter.)
-	                    E->cancel(); // switches to stSimulating/stSimulatingLooped, releases target
-	                }
-	                survivors.push_back(E);
-	            }
-	            else
-	            {
-	                xr_delete(E);
-	            }
-	        }
-	        s_emitters.clear();
-	        // Re-insert survivors so update() keeps ticking them during loading.
-	        for (auto* E : survivors)
-	            s_emitters.push_back(E);
+			survivors.push_back(E);
+			if (E->owner_data && E->owner_data->handle)
+			{
+				CSoundRender_Source* src = (CSoundRender_Source*)E->owner_data->handle;
+				bool already_saved = false;
+				for (u32 i = 0; i < persistent_sources.size(); ++i)
+				{
+					if (persistent_sources[i] == src)
+					{
+						already_saved = true;
+						break;
+					}
+				}
+				if (!already_saved)
+					persistent_sources.push_back(src);
+			}
+		}
+		else
+		{
+			// Ensure script-side ref_sound no longer points to this emitter.
+			// Without this, gameplay sound owners can keep dangling feedback
+			// pointers after level transition and crash on next update.
+			E->stop(FALSE);
+			xr_delete(E);
+		}
 	}
+	s_emitters.clear();
+	for (u32 i = 0; i < survivors.size(); ++i)
+	{
+		CSoundRender_Emitter* E = survivors[i];
+		s_emitters.push_back(E);
+		if (E->owner_data)
+			reconcile_emitter_feedback(E->owner_data._get());
+	}
+
+	// Remove sources not used by persistent survivors.
+	xr_unordered_map<xr_string, CSoundRender_Source*> kept_sources;
+	for (auto& kv : s_sources)
+	{
+		bool keep = false;
+		for (u32 i = 0; i < persistent_sources.size(); ++i)
+		{
+			if (persistent_sources[i] == kv.second)
+			{
+				keep = true;
+				break;
+			}
+		}
+		if (keep)
+			kept_sources[kv.first] = kv.second;
+		else
+			xr_delete(kv.second);
+	}
+	s_sources.clear();
+	s_sources = std::move(kept_sources);
 
 	g_target_temp_data.clear();
 	g_target_temp_data_16.clear();
@@ -184,6 +219,85 @@ void CSoundRender_Core::stop_persistent_emitters()
 	sound_api_leave();
 }
 
+bool CSoundRender_Core::emitter_belongs_to_owner(CSoundRender_Emitter* E, ref_sound_data* owner)
+{
+	return owner && E && E->owner_data && E->owner_data._get() == owner;
+}
+
+CSoundRender_Emitter* CSoundRender_Core::find_emitter_for_owner(ref_sound_data* owner, bool playing_only) const
+{
+	if (!owner)
+		return nullptr;
+
+	for (u32 it = 0; it < s_emitters.size(); it++)
+	{
+		CSoundRender_Emitter* E = s_emitters[it];
+		if (emitter_belongs_to_owner(E, owner) && (!playing_only || E->isPlaying()))
+			return E;
+	}
+	return nullptr;
+}
+
+void CSoundRender_Core::stop_emitters_for_owner(ref_sound_data* owner)
+{
+	if (!owner)
+		return;
+
+	sound_api_enter();
+	for (u32 it = 0; it < s_emitters.size(); it++)
+	{
+		CSoundRender_Emitter* E = s_emitters[it];
+		if (!emitter_belongs_to_owner(E, owner))
+			continue;
+		if (E->is_persistent())
+			E->set_persistent(false);
+		E->stop(FALSE);
+	}
+	sound_api_leave();
+}
+
+bool CSoundRender_Core::has_playing_emitter_for_owner(ref_sound_data* owner) const
+{
+	return find_emitter_for_owner(owner, true) != nullptr;
+}
+
+bool CSoundRender_Core::reconcile_emitter_feedback(ref_sound_data* owner)
+{
+	if (!owner)
+		return false;
+
+	sound_api_enter();
+	CSoundRender_Emitter* E = find_emitter_for_owner(owner, true);
+	if (!E && owner->handle)
+	{
+		// Level transition can recreate Lua sound objects (new owner pointer) while
+		// a persistent emitter keeps playing. Reattach by source handle so control
+		// (stop/volume/state) continues to work after load without restarting audio.
+		for (u32 it = 0; it < s_emitters.size(); it++)
+		{
+			CSoundRender_Emitter* candidate = s_emitters[it];
+			if (!candidate || !candidate->is_persistent() || !candidate->isPlaying())
+				continue;
+			if (!candidate->owner_data || candidate->owner_data->handle != owner->handle)
+				continue;
+
+			ref_sound_data_ptr prev_owner = candidate->owner_data;
+			if (prev_owner && prev_owner._get() != owner)
+				prev_owner->feedback = nullptr;
+
+			release_persistent(candidate);
+			candidate->owner_data = owner;
+			anchor_persistent(candidate);
+			E = candidate;
+			break;
+		}
+	}
+	if (E)
+		owner->feedback = E;
+	sound_api_leave();
+	return E != nullptr;
+}
+
 void CSoundRender_Core::restart_emitters()
 {
 	for (u32 eit = 0; eit < s_emitters.size(); eit++)
@@ -198,7 +312,8 @@ void CSoundRender_Core::set_heavy_load_active(bool active)
 
 bool CSoundRender_Core::use_background_update() const
 {
-	return m_heavy_load_active || has_playing_persistent();
+	// Dedicated sound thread owns OpenAL buffer updates whenever it is running
+	return m_bUpdateThreadRun != FALSE;
 }
 
 void CSoundRender_Core::sound_api_enter()
@@ -217,6 +332,7 @@ void CSoundRender_Core::update_thread_start()
 {
 	if (m_bUpdateThreadRun)
 		return;
+	m_bUpdateThreadExited = FALSE;
 	m_bUpdateThreadRun = TRUE;
 	thread_spawn(SoundRender_UpdateThread, "X-Ray Sound Update", 0, nullptr);
 }
@@ -226,7 +342,10 @@ void CSoundRender_Core::update_thread_stop()
 	if (!m_bUpdateThreadRun)
 		return;
 	m_bUpdateThreadRun = FALSE;
-	Sleep(100);
+	// Wait until the worker has finished its current iteration and exited, so the
+	// caller (e.g. _clear) can safely tear down OpenAL targets/context afterwards.
+	while (!m_bUpdateThreadExited)
+		Sleep(1);
 }
 
 bool CSoundRender_Core::has_playing_persistent() const
@@ -249,7 +368,7 @@ int CSoundRender_Core::pause_emitters(bool val)
 	for (u32 it = 0; it < s_emitters.size(); it++)
 	{
 		CSoundRender_Emitter* E = (CSoundRender_Emitter*)s_emitters[it];
-		if (E->is_persistent())
+		if (E->is_persistent() && E->is_persistent_in_menu())
 			continue;
 		E->pause(val, val ? m_iPauseCounter : m_iPauseCounter + 1);
 	}
@@ -494,6 +613,7 @@ void CSoundRender_Core::play(ref_sound& S, CObject* O, u32 flags, float delay)
 	if (!bPresent || (0==S._handle())) return;
 	sound_api_enter();
 	S._p->g_object = O;
+	S.reconcile_feedback();
 	if (S._feedback()) ((CSoundRender_Emitter*)S._feedback())->rewind();
 	else i_play(&S, flags & sm_Looped, delay);
 
@@ -544,6 +664,7 @@ void CSoundRender_Core::play_at_pos(ref_sound& S, CObject* O, const Fvector &pos
 	if (!bPresent || (0 == S._handle())) return;
 	sound_api_enter();
 	S._p->g_object = O;
+	S.reconcile_feedback();
 	if (S._feedback()) ((CSoundRender_Emitter*)S._feedback())->rewind();
 	else i_play(&S, flags & sm_Looped, delay);
 

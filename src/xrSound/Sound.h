@@ -45,7 +45,6 @@ XRSOUND_API extern float psSpeedOfSound;
 XRSOUND_API extern int psSoundCacheSizeMB;
 XRSOUND_API extern xr_token* snd_devices_token;
 XRSOUND_API extern xr_string snd_device_name;
-
 // reverb overwrite
 extern BOOL reverb_overwrite;
 
@@ -213,6 +212,8 @@ public:
 
 	IC void stop();
 	IC void stop_deffered();
+	IC void reconcile_feedback();
+	IC bool has_playing_emitter() const;
 	IC void set_position(const Fvector& pos);
 	IC void set_frequency(float freq);
 	IC void set_range(float min, float max);
@@ -337,6 +338,8 @@ public:
 	// Survive level unload (implementation forces 2D when enabled).
 	virtual void set_persistent(bool bPersist) = 0;
 	virtual bool is_persistent() const = 0;
+	virtual void set_persistent_in_menu(bool bPersistInMenu) = 0;
+	virtual bool is_persistent_in_menu() const = 0;
 };
 
 /// definition (Sound Stream Interface)
@@ -416,6 +419,9 @@ public:
 	virtual void destroy(ref_sound& S) = 0;
 	virtual void stop_emitters() = 0;
     virtual void stop_persistent_emitters() = 0;   // force-stops ALL persistent emitters
+	virtual void stop_emitters_for_owner(ref_sound_data* owner) = 0;
+	virtual bool has_playing_emitter_for_owner(ref_sound_data* owner) const = 0;
+	virtual bool reconcile_emitter_feedback(ref_sound_data* owner) = 0;
 	virtual bool has_playing_persistent() const = 0;
 	virtual void set_heavy_load_active(bool active) = 0;
 	virtual int pause_emitters(bool val) = 0;
@@ -542,10 +548,31 @@ IC void ref_sound::set_priority(float p)
 	if (_feedback()) _feedback()->set_priority(p);
 }
 
+IC void ref_sound::reconcile_feedback()
+{
+	if (!_p || _p->feedback || !::Sound)
+		return;
+	VERIFY(!::Sound->i_locked());
+	::Sound->reconcile_emitter_feedback(_p._get());
+}
+
+IC bool ref_sound::has_playing_emitter() const
+{
+	if (!_p)
+		return false;
+	if (_p->feedback)
+		return true;
+	return ::Sound && ::Sound->has_playing_emitter_for_owner(_p._get());
+}
+
 IC void ref_sound::stop()
 {
 	VERIFY(!::Sound->i_locked());
-	if (_feedback()) _feedback()->stop(FALSE);
+	reconcile_feedback();
+	if (_feedback())
+		_feedback()->stop(FALSE);
+	else if (_p && ::Sound)
+		::Sound->stop_emitters_for_owner(_p._get());
 }
 
 IC void ref_sound::stop_deffered()
